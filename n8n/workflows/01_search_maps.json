@@ -1,0 +1,190 @@
+{
+  "name": "01 - Search Google Maps",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "search-maps",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "search-maps"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.headers['x-webhook-secret'] }}",
+              "rightValue": "={{ 162ba4202afc90b3b188af614f449553f2e65b248e2e75bbe954610c19470749 }}",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "validate-secret",
+      "name": "Validate Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"error\": \"Unauthorized\" }",
+        "options": { "responseCode": 401 }
+      },
+      "id": "respond-401",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [640, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/maps",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-KEY", "value": "={{ $env.SERPER_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $json.body.niche + ' en ' + $json.body.location }}" },
+            { "name": "gl", "value": "es" },
+            { "name": "hl", "value": "es" },
+            { "name": "num", "value": "10" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "serper-maps",
+      "name": "Serper Maps Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Webhook').first().json.body;\nconst places = $input.first().json.places || [];\n\nreturn places.map(place => ({\n  search_id: body.search_id,\n  user_id: body.user_id,\n  niche: body.niche,\n  location: body.location,\n  place_id: place.placeId || place.cid || `${place.title}_${place.address}`,\n  name: place.title || '',\n  address: place.address || '',\n  phone: place.phoneNumber || '',\n  website: place.website || '',\n  google_maps_url: place.link || '',\n  rating: place.rating || null,\n  reviews_count: place.reviews || 0,\n  has_website: !!(place.website && place.website.length > 0)\n}));"
+      },
+      "id": "map-places",
+      "name": "Map Places to Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "insert-lead",
+      "name": "Insert Lead to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1040, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/analyze-website",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-Webhook-Secret", "value": "={{ 162ba4202afc90b3b188af614f449553f2e65b248e2e75bbe954610c19470749 }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lead_id\": \"{{ $json[0].id }}\",\n  \"website_url\": \"{{ $json[0].website }}\",\n  \"place_id\": \"{{ $json[0].place_id }}\",\n  \"niche\": \"{{ $('Map Places to Leads').item.json.niche }}\",\n  \"location\": \"{{ $('Map Places to Leads').item.json.location }}\"\n}",
+        "options": {}
+      },
+      "id": "trigger-analyze",
+      "name": "Trigger Analyze Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1240, 280]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/searches?id=eq.{{ $('Webhook').first().json.body.search_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"status\": \"processing\", \"leads_found\": {{ $('Map Places to Leads').all().length }} }",
+        "options": {}
+      },
+      "id": "update-search-status",
+      "name": "Update Search Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1040, 460]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true }",
+        "options": { "responseCode": 200 }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1440, 280]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Validate Secret", "type": "main", "index": 0 }]] },
+    "Validate Secret": {
+      "main": [
+        [{ "node": "Serper Maps Search", "type": "main", "index": 0 }],
+        [{ "node": "Respond 401", "type": "main", "index": 0 }]
+      ]
+    },
+    "Serper Maps Search": { "main": [[{ "node": "Map Places to Leads", "type": "main", "index": 0 }]] },
+    "Map Places to Leads": { "main": [[{ "node": "Insert Lead to Supabase", "type": "main", "index": 0 }]] },
+    "Insert Lead to Supabase": {
+      "main": [[
+        { "node": "Trigger Analyze Website", "type": "main", "index": 0 },
+        { "node": "Update Search Status", "type": "main", "index": 0 }
+      ]]
+    },
+    "Trigger Analyze Website": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "description": "Busca negocios en Google Maps via Serper.dev, inserta leads en Supabase y lanza el análisis de web." }
+}

@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "n8n": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\marco\\OneDrive\\Desktop\\Claude\\Marco Personal\\n8n\\n8n-mcp\\dist\\index.js"
+      ],
+      "env": {
+        "N8N_API_URL": "https://logtime.app.n8n.cloud",
+        "N8N_API_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxOTIzMDdkOS03ZTMwLTQ0M2QtYTI0OS0xNDZhNTc1NmMwMDMiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiYWUzNjQ4OTgtYWZkNC00NDRhLTk0MDMtMTlmYjJhOTUyMGNiIiwiaWF0IjoxNzc4NzczODEzfQ.8zknpp_uSiVDl0NIXL2lT_Lkc254_X1tffj0HFGglGk"
+      }
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev)",
+      "Bash(npm run build)",
+      "Bash(npm run lint)",
+      "Bash(npx tsc --noEmit)"
+    ]
+  }
+}

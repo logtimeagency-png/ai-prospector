@@ -1,0 +1,206 @@
+{
+  "name": "02 - Analyze Website",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analyze-website",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "analyze-website"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.headers['x-webhook-secret'] }}",
+              "rightValue": "={{ 162ba4202afc90b3b188af614f449553f2e65b248e2e75bbe954610c19470749 }}",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "validate-secret",
+      "name": "Validate Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"error\": \"Unauthorized\" }",
+        "options": { "responseCode": 401 }
+      },
+      "id": "respond-401",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [640, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.website_url }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ]
+        }
+      },
+      "id": "has-website",
+      "name": "Has Website?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={{ encodeURIComponent($json.body.website_url) }}&strategy=mobile&category=performance",
+        "options": {}
+      },
+      "id": "psi-call",
+      "name": "PageSpeed Insights API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [840, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Webhook').first().json.body.website_url }}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "timeout": 10000
+        }
+      },
+      "id": "fetch-html",
+      "name": "Fetch HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [840, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Webhook').first().json.body;\nconst psiData = $('PageSpeed Insights API').first().json;\nconst htmlResponse = $('Fetch HTML').first().json;\n\n// PSI Score (0-100)\nconst psiScore = psiData?.lighthouseResult?.categories?.performance?.score;\nconst speedScore = psiScore !== undefined ? Math.round(psiScore * 100) : null;\n\n// SSL\nconst websiteUrl = body.website_url || '';\nconst hasSSL = websiteUrl.startsWith('https://');\n\n// HTML analysis\nconst html = htmlResponse?.body || '';\nconst htmlLower = html.toLowerCase();\n\n// Mobile friendly (viewport meta)\nconst isMobileFriendly = htmlLower.includes('name=\"viewport\"') || htmlLower.includes(\"name='viewport'\");\n\n// Booking system detection\nconst bookingKeywords = ['reservar', 'book', 'appointment', 'cita', 'calendario', 'calendly', 'booksy', 'doctoralia', 'agenda online'];\nconst hasBooking = bookingKeywords.some(k => htmlLower.includes(k));\n\n// Meta description\nconst metaMatch = html.match(/<meta[^>]+name=[\"']description[\"'][^>]+content=[\"']([^\"']+)[\"']/i)\n               || html.match(/<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+name=[\"']description[\"']/i);\nconst metaDescription = metaMatch ? metaMatch[1].trim() : null;\n\n// Meta title\nconst titleMatch = html.match(/<title[^>]*>([^<]+)<\\/title>/i);\nconst metaTitle = titleMatch ? titleMatch[1].trim() : null;\n\nreturn [{\n  lead_id: body.lead_id,\n  user_id: body.user_id || null,\n  niche: body.niche,\n  location: body.location,\n  website_speed_score: speedScore,\n  has_ssl: hasSSL,\n  is_mobile_friendly: isMobileFriendly,\n  has_booking_system: hasBooking,\n  meta_title: metaTitle,\n  meta_description: metaDescription,\n  has_website: true\n}];"
+      },
+      "id": "analyze-html",
+      "name": "Analyze HTML & PSI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Webhook').first().json.body;\n// No website — set all fields to null/false\nreturn [{\n  lead_id: body.lead_id,\n  user_id: body.user_id || null,\n  niche: body.niche,\n  location: body.location,\n  website_speed_score: null,\n  has_ssl: null,\n  is_mobile_friendly: null,\n  has_booking_system: false,\n  meta_title: null,\n  meta_description: null,\n  has_website: false\n}];"
+      },
+      "id": "no-website-defaults",
+      "name": "No Website Defaults",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Opportunity Score\nconst d = $input.first().json;\n\nlet score = 0;\nconst painPoints = [];\n\nif (!d.has_website) {\n  score += 35;\n  painPoints.push('no_website');\n} else {\n  if (d.website_speed_score !== null) {\n    if (d.website_speed_score < 50) { score += 20; painPoints.push('slow_website'); }\n    else if (d.website_speed_score <= 70) { score += 10; painPoints.push('slow_website'); }\n  }\n  if (!d.has_ssl) { score += 8; painPoints.push('no_ssl'); }\n  if (!d.is_mobile_friendly) { score += 8; painPoints.push('not_mobile_friendly'); }\n  if (!d.has_booking_system) { score += 10; painPoints.push('no_booking'); }\n  if (!d.meta_description) { score += 5; painPoints.push('no_meta_description'); }\n}\n\n// Reviews and rating come from the lead in Supabase — handled after DB fetch\n// For now calculate with what we have\n\nconst premiumNiches = ['dentista','abogado','médico','psicólogo','contador','inmobiliaria','notario','clínica'];\nconst nicheNorm = (d.niche || '').toLowerCase();\nconst isPremium = premiumNiches.some(n => nicheNorm.includes(n));\nif (isPremium) score = Math.round(score * 1.2);\n\nscore = Math.min(score, 100);\n\nreturn [{ ...d, opportunity_score: score, pain_points: JSON.stringify(painPoints) }];"
+      },
+      "id": "calc-score",
+      "name": "Calculate Opportunity Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $json.lead_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"website_speed_score\": {{ $json.website_speed_score }},\n  \"has_ssl\": {{ $json.has_ssl }},\n  \"is_mobile_friendly\": {{ $json.is_mobile_friendly }},\n  \"has_booking_system\": {{ $json.has_booking_system }},\n  \"meta_title\": {{ $json.meta_title ? JSON.stringify($json.meta_title) : 'null' }},\n  \"meta_description\": {{ $json.meta_description ? JSON.stringify($json.meta_description) : 'null' }},\n  \"has_website\": {{ $json.has_website }},\n  \"opportunity_score\": {{ $json.opportunity_score }},\n  \"pain_points\": {{ $json.pain_points }},\n  \"analysis_status\": \"analyzing\"\n}",
+        "options": {}
+      },
+      "id": "update-lead",
+      "name": "Update Lead in Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/generate-messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-Webhook-Secret", "value": "={{ 162ba4202afc90b3b188af614f449553f2e65b248e2e75bbe954610c19470749 }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lead_id\": \"{{ $('Calculate Opportunity Score').first().json.lead_id }}\",\n  \"user_id\": \"{{ $('Calculate Opportunity Score').first().json.user_id }}\"\n}",
+        "options": {}
+      },
+      "id": "trigger-messages",
+      "name": "Trigger Generate Messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1640, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true }",
+        "options": { "responseCode": 200 }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1840, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Validate Secret", "type": "main", "index": 0 }]] },
+    "Validate Secret": {
+      "main": [
+        [{ "node": "Has Website?", "type": "main", "index": 0 }],
+        [{ "node": "Respond 401", "type": "main", "index": 0 }]
+      ]
+    },
+    "Has Website?": {
+      "main": [
+        [
+          { "node": "PageSpeed Insights API", "type": "main", "index": 0 },
+          { "node": "Fetch HTML", "type": "main", "index": 0 }
+        ],
+        [{ "node": "No Website Defaults", "type": "main", "index": 0 }]
+      ]
+    },
+    "PageSpeed Insights API": { "main": [[{ "node": "Analyze HTML & PSI", "type": "main", "index": 0 }]] },
+    "Fetch HTML": { "main": [[{ "node": "Analyze HTML & PSI", "type": "main", "index": 0 }]] },
+    "Analyze HTML & PSI": { "main": [[{ "node": "Calculate Opportunity Score", "type": "main", "index": 0 }]] },
+    "No Website Defaults": { "main": [[{ "node": "Calculate Opportunity Score", "type": "main", "index": 0 }]] },
+    "Calculate Opportunity Score": { "main": [[{ "node": "Update Lead in Supabase", "type": "main", "index": 0 }]] },
+    "Update Lead in Supabase": { "main": [[{ "node": "Trigger Generate Messages", "type": "main", "index": 0 }]] },
+    "Trigger Generate Messages": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "description": "Analiza el sitio web de un lead: PSI score, SSL, mobile, booking, meta. Calcula Opportunity Score. Lanza generación de scripts." }
+}

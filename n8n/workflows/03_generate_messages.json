@@ -1,0 +1,242 @@
+{
+  "name": "03 - Generate AI Messages",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-messages",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "generate-messages"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.headers['x-webhook-secret'] }}",
+              "rightValue": "={{ 162ba4202afc90b3b188af614f449553f2e65b248e2e75bbe954610c19470749 }}",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "validate-secret",
+      "name": "Validate Secret",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"error\": \"Unauthorized\" }",
+        "options": { "responseCode": 401 }
+      },
+      "id": "respond-401",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [640, 500]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $json.body.lead_id }}&select=*",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-lead",
+      "name": "Fetch Lead from Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/decrement_credits",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"p_user_id\": \"{{ $('Webhook').first().json.body.user_id }}\",\n  \"p_lead_id\": \"{{ $('Webhook').first().json.body.lead_id }}\",\n  \"p_action\": \"lead_analysis\"\n}",
+        "options": {}
+      },
+      "id": "decrement-credits",
+      "name": "Decrement Credits RPC",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "has-credits",
+      "name": "Has Credits?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $('Webhook').first().json.body.lead_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"analysis_status\": \"failed\" }",
+        "options": {}
+      },
+      "id": "mark-failed-credits",
+      "name": "Mark Failed (No Credits)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1240, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Fetch Lead from Supabase').first().json[0];\nconst painPoints = Array.isArray(lead.pain_points) ? lead.pain_points : JSON.parse(lead.pain_points || '[]');\n\nconst painDescriptions = {\n  no_website: 'no tiene sitio web',\n  slow_website: `su sitio web es muy lento (puntuación ${lead.website_speed_score}/100)`,\n  no_ssl: 'su sitio web no tiene certificado SSL',\n  not_mobile_friendly: 'su sitio web no está optimizado para móviles',\n  no_booking: 'no tiene sistema de reservas online',\n  few_reviews: `tiene muy pocas reseñas en Google (solo ${lead.reviews_count})`,\n  low_rating: `tiene una calificación baja (${lead.rating} ⭐)`,\n  no_meta_description: 'no tiene descripción SEO optimizada'\n};\n\nconst painList = painPoints.slice(0, 3).map(p => `- ${painDescriptions[p] || p}`).join('\\n');\n\nconst systemPrompt = `Eres un experto en ventas digitales B2B especializado en vender servicios web y de IA a pequeños negocios locales en España.\\n\\nTu tarea es generar 3 scripts de venta CORTOS, DIRECTOS y MUY PERSONALIZADOS basados en los problemas reales detectados en el negocio.\\n\\nREGLAS CRÍTICAS:\\n- Nunca mencionar que eres IA ni que has analizado su web automáticamente\\n- Usa siempre el nombre real del negocio\\n- Menciona SOLO los 1-2 problemas más importantes\\n- Tono: cercano, directo, como si fuera un mensaje de un profesional conocido\\n- NO uses saludos corporativos (\"Estimado\", \"Me pongo en contacto\")\\n- Email: máximo 120 palabras, asunto incluido\\n- WhatsApp: máximo 70 palabras, informal, emojis permitidos\\n- DM Instagram: máximo 50 palabras, muy casual\\n\\nResponde SIEMPRE en JSON con este formato exacto (sin markdown, solo JSON puro):\\n{\\n  \"ai_email\": \"Asunto: ...\\\\n\\\\nCuerpo del email...\",\\n  \"ai_whatsapp\": \"Texto del mensaje de WhatsApp...\",\\n  \"ai_dm\": \"Texto del DM de Instagram...\"\\n}`;\n\nconst userPrompt = `Negocio: ${lead.name}\\nSector: desconocido\\nUbicación: desconocida\\nCalificación Google: ${lead.rating ?? 'sin dato'} ⭐ (${lead.reviews_count} reseñas)\\nOpportunity Score: ${lead.opportunity_score}/100\\n\\nProblemas detectados:\\n${painList}\\n\\nGenera los 3 scripts de venta personalizados para este negocio.`;\n\nreturn [{ system: systemPrompt, user: userPrompt, lead_id: lead.id }];"
+      },
+      "id": "build-prompt",
+      "name": "Build OpenAI Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENAI_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    { \"role\": \"system\", \"content\": {{ JSON.stringify($json.system) }} },\n    { \"role\": \"user\", \"content\": {{ JSON.stringify($json.user) }} }\n  ],\n  \"response_format\": { \"type\": \"json_object\" },\n  \"max_tokens\": 800,\n  \"temperature\": 0.7\n}",
+        "options": {}
+      },
+      "id": "openai-call",
+      "name": "OpenAI GPT-4o-mini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1440, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst content = response.choices?.[0]?.message?.content || '{}';\nlet scripts;\ntry {\n  scripts = JSON.parse(content);\n} catch {\n  scripts = { ai_email: content, ai_whatsapp: content, ai_dm: content };\n}\nconst leadId = $('Build OpenAI Prompt').first().json.lead_id;\nreturn [{ ...scripts, lead_id: leadId }];"
+      },
+      "id": "parse-response",
+      "name": "Parse OpenAI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1640, 280]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $json.lead_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"ai_email\": {{ JSON.stringify($json.ai_email) }},\n  \"ai_whatsapp\": {{ JSON.stringify($json.ai_whatsapp) }},\n  \"ai_dm\": {{ JSON.stringify($json.ai_dm) }},\n  \"ai_generated_at\": \"{{ new Date().toISOString() }}\",\n  \"analysis_status\": \"done\"\n}",
+        "options": {}
+      },
+      "id": "save-scripts",
+      "name": "Save Scripts to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1840, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When all leads in a search are done, update search status\n// This is a simplified version - in production you'd check all leads\nconst searchRes = await $helpers.httpRequest({\n  method: 'GET',\n  url: `${process.env.SUPABASE_URL || $env.SUPABASE_URL}/rest/v1/leads?search_id=eq.${$('Fetch Lead from Supabase').first().json[0].search_id}&select=analysis_status`,\n  headers: {\n    apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n    Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`\n  }\n});\n\nconst allLeads = searchRes;\nconst allDone = allLeads.every(l => l.analysis_status === 'done' || l.analysis_status === 'failed');\n\nif (allDone) {\n  await $helpers.httpRequest({\n    method: 'PATCH',\n    url: `${$env.SUPABASE_URL}/rest/v1/searches?id=eq.${$('Fetch Lead from Supabase').first().json[0].search_id}`,\n    headers: {\n      apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n      Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n      'Content-Type': 'application/json'\n    },\n    body: JSON.stringify({ status: 'done' })\n  });\n}\n\nreturn [{ ok: true, all_done: allDone }];"
+      },
+      "id": "check-search-done",
+      "name": "Check Search Completion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2040, 280]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true }",
+        "options": { "responseCode": 200 }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2240, 280]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Validate Secret", "type": "main", "index": 0 }]] },
+    "Validate Secret": {
+      "main": [
+        [{ "node": "Fetch Lead from Supabase", "type": "main", "index": 0 }],
+        [{ "node": "Respond 401", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Lead from Supabase": { "main": [[{ "node": "Decrement Credits RPC", "type": "main", "index": 0 }]] },
+    "Decrement Credits RPC": { "main": [[{ "node": "Has Credits?", "type": "main", "index": 0 }]] },
+    "Has Credits?": {
+      "main": [
+        [{ "node": "Build OpenAI Prompt", "type": "main", "index": 0 }],
+        [{ "node": "Mark Failed (No Credits)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build OpenAI Prompt": { "main": [[{ "node": "OpenAI GPT-4o-mini", "type": "main", "index": 0 }]] },
+    "OpenAI GPT-4o-mini": { "main": [[{ "node": "Parse OpenAI Response", "type": "main", "index": 0 }]] },
+    "Parse OpenAI Response": { "main": [[{ "node": "Save Scripts to Supabase", "type": "main", "index": 0 }]] },
+    "Save Scripts to Supabase": { "main": [[{ "node": "Check Search Completion", "type": "main", "index": 0 }]] },
+    "Check Search Completion": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "description": "Verifica créditos (RPC atómico), llama GPT-4o-mini, guarda scripts en Supabase, marca lead como done." }
+}
