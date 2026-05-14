@@ -35,8 +35,10 @@ function maybeCleanup() {
 const LIMITS = {
   // Auth endpoints: 10 attempts per 15 min per IP
   auth: { limit: 10, windowMs: 15 * 60 * 1000 },
-  // Search API: 20 searches per hour per user (generous, credits are the real limit)
+  // Search API: 20 searches per hour per IP
   search: { limit: 20, windowMs: 60 * 60 * 1000 },
+  // Billing: 5 checkout attempts per hour per IP (prevents card testing)
+  billing: { limit: 5, windowMs: 60 * 60 * 1000 },
   // General API: 200 req per minute per IP
   api: { limit: 200, windowMs: 60 * 1000 },
 }
@@ -68,6 +70,16 @@ export async function middleware(request: NextRequest) {
     if (!rateLimit(`search:${ip}`, LIMITS.search.limit, LIMITS.search.windowMs)) {
       return NextResponse.json(
         { error: 'Límite de búsquedas alcanzado. Vuelve en 1 hora.' },
+        { status: 429, headers: { 'Retry-After': '3600' } }
+      )
+    }
+  }
+
+  // Billing endpoints — prevent card testing / checkout abuse
+  if (pathname.startsWith('/api/billing/')) {
+    if (!rateLimit(`billing:${ip}`, LIMITS.billing.limit, LIMITS.billing.windowMs)) {
+      return NextResponse.json(
+        { error: 'Demasiados intentos de pago. Espera 1 hora.' },
         { status: 429, headers: { 'Retry-After': '3600' } }
       )
     }

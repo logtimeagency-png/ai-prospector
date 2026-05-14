@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { n8n } from '@/lib/n8n'
+import { isValidUUID } from '@/lib/security'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(
@@ -7,8 +8,12 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const supabase = await createClient()
 
+  if (!isValidUUID(id)) {
+    return NextResponse.json({ error: 'ID inválido.' }, { status: 422 })
+  }
+
+  const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -24,17 +29,30 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isValidUUID(id)) {
+    return NextResponse.json({ error: 'ID inválido.' }, { status: 422 })
+  }
 
-  const body = await request.json()
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 })
+  }
+
+  let body: Record<string, unknown>
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
   if (body.action !== 'regenerate') {
     return NextResponse.json({ error: 'Acción no válida.' }, { status: 422 })
   }
 
-  // Verificar que el lead pertenece al usuario y está en estado 'done'
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   const { data: lead } = await supabase
     .from('leads').select('id, analysis_status').eq('id', id).eq('user_id', user.id).single()
 
@@ -43,8 +61,12 @@ export async function PATCH(
     return NextResponse.json({ error: 'El lead aún no está analizado.' }, { status: 422 })
   }
 
-  // Lanzar regeneración (consume 1 crédito via RPC en el workflow de n8n)
-  await n8n.triggerMessages({ lead_id: id, user_id: user.id })
+  try {
+    await n8n.triggerMessages({ lead_id: id, user_id: user.id })
+  } catch (err) {
+    console.error('[PATCH /api/leads/:id] n8n error:', err)
+    return NextResponse.json({ error: 'Error al regenerar. Inténtalo de nuevo.' }, { status: 503 })
+  }
 
   return NextResponse.json({ message: 'Regenerando scripts...' }, { status: 202 })
 }

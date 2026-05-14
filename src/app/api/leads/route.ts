@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { isValidUUID, safeInt } from '@/lib/security'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(request: NextRequest) {
@@ -9,8 +10,13 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url)
   const searchId = searchParams.get('search_id')
-  const limit = Math.min(parseInt(searchParams.get('limit') ?? '50'), 100)
-  const offset = parseInt(searchParams.get('offset') ?? '0')
+  const limit  = safeInt(searchParams.get('limit'),  50, 1, 100)
+  const offset = safeInt(searchParams.get('offset'), 0,  0)
+
+  // Validate UUID format before hitting DB
+  if (searchId && !isValidUUID(searchId)) {
+    return NextResponse.json({ error: 'Parámetro inválido.' }, { status: 422 })
+  }
 
   let query = supabase
     .from('leads')
@@ -24,6 +30,11 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await query
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  // Never expose raw DB error messages
+  if (error) {
+    console.error('[GET /api/leads] DB error:', error.code)
+    return NextResponse.json({ error: 'Error al obtener leads.' }, { status: 500 })
+  }
+
   return NextResponse.json(data)
 }

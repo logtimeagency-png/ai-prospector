@@ -13,6 +13,11 @@ const securityHeaders = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   // Restricts browser features (camera, mic, geolocation, etc.)
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()' },
+  // Cross-Origin isolation — prevents Spectre-style side-channel attacks
+  { key: 'Cross-Origin-Opener-Policy',   value: 'same-origin' },
+  { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
+  // DNS prefetch off — prevents DNS leakage to third parties
+  { key: 'X-DNS-Prefetch-Control', value: 'off' },
   // Content Security Policy — the main XSS defense
   {
     key: 'Content-Security-Policy',
