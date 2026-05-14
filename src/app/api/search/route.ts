@@ -2,20 +2,45 @@ import { createClient } from '@/lib/supabase/server'
 import { n8n } from '@/lib/n8n'
 import { NextRequest, NextResponse } from 'next/server'
 
-export async function POST(request: NextRequest) {
-  const supabase = await createClient()
+// Chars allowed in niche/location — blocks injection attempts
+const SAFE_INPUT = /^[a-záéíóúüñàèìòùâêîôûçäëïöüA-ZÁÉÍÓÚÜÑ0-9 ,.()\-'&/]+$/i
+const MAX_LEN = 80
 
+function sanitize(val: unknown): string | null {
+  if (typeof val !== 'string') return null
+  const trimmed = val.trim().slice(0, MAX_LEN)
+  if (!trimmed || !SAFE_INPUT.test(trimmed)) return null
+  return trimmed
+}
+
+export async function POST(request: NextRequest) {
+  // Content-type guard
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 })
+  }
+
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  const niche    = sanitize((body as Record<string, unknown>).niche)
+  const location = sanitize((body as Record<string, unknown>).location)
+
+  if (!niche || !location) {
+    return NextResponse.json(
+      { error: 'Nicho y ubicación son obligatorios y solo pueden contener letras, números y espacios.' },
+      { status: 422 }
+    )
+  }
+
+  const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
-  const { niche, location } = body
-
-  if (!niche?.trim() || !location?.trim()) {
-    return NextResponse.json({ error: 'Nicho y ubicación son obligatorios.' }, { status: 422 })
-  }
-
-  // Verificar créditos
+  // Verify credits
   const { data: profile } = await supabase
     .from('profiles')
     .select('credits_total, credits_used, plan')
@@ -29,11 +54,10 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Crear registro de búsqueda
-  const query = `${niche.trim()} en ${location.trim()}`
+  const query = `${niche} en ${location}`
   const { data: search, error: searchError } = await supabase
     .from('searches')
-    .insert({ user_id: user.id, query, niche: niche.trim(), location: location.trim() })
+    .insert({ user_id: user.id, query, niche, location })
     .select()
     .single()
 
@@ -41,17 +65,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Error al crear la búsqueda.' }, { status: 500 })
   }
 
-  // Lanzar n8n en background (sin await — responder inmediatamente)
-  n8n.triggerSearch({
-    search_id: search.id,
-    user_id: user.id,
-    niche: niche.trim(),
-    location: location.trim(),
-    query,
-  }).catch(err => {
-    console.error('[n8n triggerSearch error]', err)
-    supabase.from('searches').update({ status: 'failed', error_msg: err.message }).eq('id', search.id)
-  })
+  n8n.triggerSearch({ search_id: search.id, user_id: user.id, niche, location, query })
+    .catch(err => {
+      console.error('[n8n triggerSearch error]', err)
+      supabase.from('searches').update({ status: 'failed', error_msg: err.message }).eq('id', search.id)
+    })
 
   return NextResponse.json({ search_id: search.id, message: 'Búsqueda iniciada.' }, { status: 202 })
 }
